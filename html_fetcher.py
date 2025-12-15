@@ -4,7 +4,83 @@ from bs4 import BeautifulSoup, Comment
 from urllib.parse import urlparse, urljoin
 from datetime import datetime
 
+import inspect
 
+import re
+
+def extract_python_code(ai_response: str) -> str:
+    import re
+    match = re.search(r"```python\s*([\s\S]*?)```", ai_response)
+    if match:
+        return match.group(1)
+    return ai_response  # fallback if no fences
+
+
+def clean_ai_code(ai_response: str) -> str:
+    """
+    Extract code from AI response, removing Markdown fences.
+    """
+    import re
+
+    # Remove ```python ... ``` or ``` ... ```
+    code = re.sub(r"^```python\s*|\s*```$", "", ai_response.strip(), flags=re.MULTILINE)
+    code = re.sub(r"^```\s*|\s*```$", "", code.strip(), flags=re.MULTILINE)
+    return code
+
+def run_ai_scraper(code: str, url: str):
+    namespace = {}
+    exec(code, namespace)
+
+    # Discover a function that accepts a URL
+    import inspect
+    for obj in namespace.values():
+        if callable(obj):
+            sig = inspect.signature(obj)
+            if len(sig.parameters) >= 1:
+                try:
+                    data = obj(url)
+                    if isinstance(data, list):
+                        print(data[:2])
+                        return data
+                except Exception:
+                    continue
+
+    raise RuntimeError("No suitable scraper function found TRY RUNNING GENERATED CODE MANUALLY")
+
+
+import subprocess
+import sys
+
+def run_generated_file(path: str):
+    result = subprocess.run(
+        [sys.executable, path],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print(result.stderr)
+        raise RuntimeError("Generated scraper crashed")
+
+    print(result.stdout)
+
+def save_code_to_file(code: str, filename: str):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(code)
+    print(f"✅ Saved AI-generated scraper to {filename}")
+
+def find_scraper_function(namespace):
+    candidates = []
+    for name, obj in namespace.items():
+        if callable(obj):
+            # check if it has at least 1 parameter (the URL)
+            sig = inspect.signature(obj)
+            if len(sig.parameters) >= 1:
+                candidates.append((name, obj))
+    if not candidates:
+        raise RuntimeError("No suitable scraper function found in AI code")
+    # Choose the first candidate for now
+    return candidates[0][1]
 
 
 def cast_value(value: str, dtype: str):
@@ -220,7 +296,7 @@ print(f"Blocks sent to LLM: {len(blocks)}")
 # print(blocks[0][:500])
 
 
-from schema_inferencer import build_schema_prompt
+from schema_inferencer_prompt import build_schema_prompt
 from openrouter_client import openrouter_chat
 import json
 
@@ -260,6 +336,31 @@ def extract_json(text: str) -> dict:
 
     raise ValueError("Unbalanced JSON braces")
 
+def is_code_complete(code: str) -> bool:
+    if "# === END OF FILE ===" not in code:
+        return False
+    
+    try:
+        compile(code, "<generated>", "exec")
+        return True
+    except SyntaxError:
+        return False
+
+def looks_truncated(code: str) -> bool:
+    bad_endings = (
+        "def ",
+        "class ",
+        "async def ",
+        "if ",
+        "for ",
+        "while ",
+        "=",
+        "(",
+        "{",
+        "[",
+        ":"
+    )
+    return code.rstrip().endswith(bad_endings)
 
 
 
@@ -296,16 +397,64 @@ else:
     print("✅ Schema accepted")
 
 
+# AI CODE GENERATED EXTRACTION
+try_num = 4
+MAX_CONTINUATIONS = 5
+from scraper_code_generator_prompt import generate_scraper_code, complete_scraper_code
+code_generator_ai_response = generate_scraper_code(schema)
+code_generator_ai_response = clean_ai_code(code_generator_ai_response) # generated_scrapper_code = clean_ai_code(code_generator_ai_response)
 
-data = extract_data(schema, html, base_url=url)
+for _ in range(MAX_CONTINUATIONS):
+ 
+    if is_code_complete(code_generator_ai_response):
+        break
 
-print("EXTRACTED DATA")
-print(data[:2])
-print("")
+    continuation = complete_scraper_code(code_generator_ai_response, schema)
+
+    continuation = clean_ai_code(continuation)
+    code_generator_ai_response += continuation
+
+if not is_code_complete(code_generator_ai_response):
+    genereted_code_filename = "generated_scraper_quotes_{try_num}.py"
+    save_code_to_file(code_generator_ai_response, genereted_code_filename) # generated_scrapper_code
+    raise RuntimeError("Failed to generate complete code")
 
 
-with open("output.json", "w", encoding="utf-8") as f:
-    for item in data:
-        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+genereted_code_filename = "generated_scraper_quotes_{try_num}.py"
+save_code_to_file(code_generator_ai_response, genereted_code_filename) # generated_scrapper_code
+run_generated_file(genereted_code_filename)
 
-print("Saved extracted data to output.json")
+
+
+# data = run_ai_scraper(code_generator_ai_response, url) # generated_scrapper_code
+
+# output_json_filename = "generated_scraper_quotes_{try_num}_output.json"
+# with open(output_json_filename, "w", encoding="utf-8") as f:
+#     for item in data:
+#         f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+# print("✅ Saved extracted data to ", output_json_filename)
+
+
+
+
+
+
+
+
+
+
+
+# MANUAL EXTRACTION
+# data = extract_data(schema, html, base_url=url)
+
+# print("EXTRACTED DATA")
+# print(data[:2])
+# print("")
+
+
+# with open("output.json", "w", encoding="utf-8") as f:
+#     for item in data:
+#         f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+# print("Saved extracted data to output.json")
