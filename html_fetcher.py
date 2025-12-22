@@ -338,12 +338,14 @@ def extract_json(text: str) -> dict:
 
 def is_code_complete(code: str) -> bool:
     if "# === END OF FILE ===" not in code:
+        print("# === END OF FILE === IS NOT EXIST IN THE GENERATED CODE!")
         return False
     
     try:
         compile(code, "<generated>", "exec")
         return True
     except SyntaxError:
+        print("SYNTAX ERROR IN THE GENERATED CODE!")
         return False
 
 def looks_truncated(code: str) -> bool:
