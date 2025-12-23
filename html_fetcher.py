@@ -1,3 +1,8 @@
+from scraper_code_generator_prompt import (
+    generate_scraper_code,
+    complete_scraper_code,
+    fix_scraper_code,
+)
 from typing import Literal, List
 from playwright.sync_api import sync_playwright, TimeoutError
 from bs4 import BeautifulSoup, Comment
@@ -8,8 +13,10 @@ import inspect
 
 import re
 
+
 def extract_python_code(ai_response: str) -> str:
     import re
+
     match = re.search(r"```python\s*([\s\S]*?)```", ai_response)
     if match:
         return match.group(1)
@@ -27,12 +34,14 @@ def clean_ai_code(ai_response: str) -> str:
     code = re.sub(r"^```\s*|\s*```$", "", code.strip(), flags=re.MULTILINE)
     return code
 
+
 def run_ai_scraper(code: str, url: str):
     namespace = {}
     exec(code, namespace)
 
     # Discover a function that accepts a URL
     import inspect
+
     for obj in namespace.values():
         if callable(obj):
             sig = inspect.signature(obj)
@@ -45,18 +54,17 @@ def run_ai_scraper(code: str, url: str):
                 except Exception:
                     continue
 
-    raise RuntimeError("No suitable scraper function found TRY RUNNING GENERATED CODE MANUALLY")
+    raise RuntimeError(
+        "No suitable scraper function found TRY RUNNING GENERATED CODE MANUALLY"
+    )
 
 
 import subprocess
 import sys
 
+
 def run_generated_file(path: str):
-    result = subprocess.run(
-        [sys.executable, path],
-        capture_output=True,
-        text=True
-    )
+    result = subprocess.run([sys.executable, path], capture_output=True, text=True)
 
     if result.returncode != 0:
         print(result.stderr)
@@ -64,10 +72,12 @@ def run_generated_file(path: str):
 
     print(result.stdout)
 
+
 def save_code_to_file(code: str, filename: str):
     with open(filename, "w", encoding="utf-8") as f:
         f.write(code)
     print(f"✅ Saved AI-generated scraper to {filename}")
+
 
 def find_scraper_function(namespace):
     candidates = []
@@ -206,7 +216,6 @@ def validate_schema(schema: dict, html: str, base_url: str | None = None) -> dic
 WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
 
 
-
 class HTMLFetcher:
     def __init__(
         self,
@@ -259,7 +268,7 @@ class HTMLFetcher:
             c.extract()
 
         blocks = soup.find_all(
-            ["article", "li", "section", "div"],
+            ["article", "li", "section", "div", "table", "thead", "tbody", "td"],
             limit=limit,
         )
 
@@ -284,9 +293,16 @@ def infer_schema(blocks):
     except RuntimeError:
         return build_schema_prompt(blocks[:3])
 
+
 fetcher = HTMLFetcher()
 
-url = "https://quotes.toscrape.com/"
+# url = "https://quotes.toscrape.com/"
+# url = "https://books.toscrape.com/"
+# url = "https://quotes.toscrape.com/scroll"
+# url = "https://quotes.toscrape.com/tableful"
+url = "https://quotes.toscrape.com/random"
+
+try_num = 11
 html = fetcher.fetch_html(url)
 blocks = fetcher.extract_candidate_blocks(html)
 
@@ -301,6 +317,7 @@ from openrouter_client import openrouter_chat
 import json
 
 import re
+
 
 def extract_json(text: str) -> dict:
     """
@@ -331,22 +348,61 @@ def extract_json(text: str) -> dict:
         elif text[i] == "}":
             depth -= 1
             if depth == 0:
-                candidate = text[start:i+1]
+                candidate = text[start : i + 1]
                 return json.loads(candidate)
 
     raise ValueError("Unbalanced JSON braces")
 
+
+def complete_the_code(code: str, schema: dict) -> tuple[bool, str]:
+    if "# === END OF FILE ===" not in code:
+        print("# === END OF FILE === IS NOT EXIST IN THE GENERATED CODE!")
+
+        continuation = complete_scraper_code(code, schema)
+        continuation = clean_ai_code(continuation)
+        code += continuation
+        return False, code
+
+    try:
+        compile(code, "<generated>", "exec")
+        return True, code
+    except SyntaxError as e:
+        print("SYNTAX ERROR IN THE GENERATED CODE!")
+        msg = f"SyntaxError: {e.msg}\n" f"Line: {e.lineno}\n" f"Text: {e.text}"
+        response = fix_scraper_code(code, msg)
+        fixed_code = clean_ai_code(response)
+        return False, fixed_code
+
+
 def is_code_complete(code: str) -> bool:
     if "# === END OF FILE ===" not in code:
         print("# === END OF FILE === IS NOT EXIST IN THE GENERATED CODE!")
+
+        continuation = complete_scraper_code(code, schema)
+        continuation = clean_ai_code(continuation)
+        code += continuation
         return False
-    
+
     try:
         compile(code, "<generated>", "exec")
         return True
-    except SyntaxError:
-        print("SYNTAX ERROR IN THE GENERATED CODE!")
-        return False
+    except SyntaxError as e:
+        # print("SYNTAX ERROR IN THE GENERATED CODE!")
+        msg = f"SyntaxError: {e.msg}\n" f"Line: {e.lineno}\n" f"Text: {e.text}"
+
+        return False, msg
+
+
+def is_syntax_valid(code: str):
+    try:
+        compile(code, "<generated>", "exec")
+        return True
+    except SyntaxError as e:
+        # print("SYNTAX ERROR IN THE GENERATED CODE!")
+        msg = f"SyntaxError: {e.msg}\n" f"Line: {e.lineno}\n" f"Text: {e.text}"
+
+        return False, msg
+
 
 def looks_truncated(code: str) -> bool:
     bad_endings = (
@@ -360,10 +416,9 @@ def looks_truncated(code: str) -> bool:
         "(",
         "{",
         "[",
-        ":"
+        ":",
     )
     return code.rstrip().endswith(bad_endings)
-
 
 
 blocks = fetcher.extract_candidate_blocks(html)
@@ -372,7 +427,7 @@ prompt = infer_schema(blocks)  # 🔑 5–20 blocks ONLY
 
 raw_output = openrouter_chat(
     prompt=prompt,
-    model= "mistralai/devstral-2512:free", # "mistralai/mistral-7b-instruct:free", # "mistralai/devstral-2512:free",
+    model="mistralai/devstral-2512:free",  # "mistralai/mistral-7b-instruct:free", # "mistralai/devstral-2512:free",
     # temperature=0.0,
 )
 
@@ -400,32 +455,43 @@ else:
 
 
 # AI CODE GENERATED EXTRACTION
-try_num = 4
 MAX_CONTINUATIONS = 5
-from scraper_code_generator_prompt import generate_scraper_code, complete_scraper_code
-code_generator_ai_response = generate_scraper_code(schema)
-code_generator_ai_response = clean_ai_code(code_generator_ai_response) # generated_scrapper_code = clean_ai_code(code_generator_ai_response)
+
+code_generator_ai_response = generate_scraper_code(schema, url)
+code_generator_ai_response = clean_ai_code(
+    code_generator_ai_response
+)  # generated_scrapper_code = clean_ai_code(code_generator_ai_response)
 
 for _ in range(MAX_CONTINUATIONS):
- 
-    if is_code_complete(code_generator_ai_response):
+
+    # if is_code_complete(code_generator_ai_response):
+    # break
+
+    is_completed, code_generator_ai_response = complete_the_code(
+        code_generator_ai_response, schema
+    )
+
+    if is_completed:
         break
 
-    continuation = complete_scraper_code(code_generator_ai_response, schema)
-
-    continuation = clean_ai_code(continuation)
-    code_generator_ai_response += continuation
+    # continuation = complete_scraper_code(code_generator_ai_response, schema)
+    # continuation = clean_ai_code(continuation)
+    # code_generator_ai_response += continuation
 
 if not is_code_complete(code_generator_ai_response):
-    genereted_code_filename = "generated_scraper_quotes_{try_num}.py"
-    save_code_to_file(code_generator_ai_response, genereted_code_filename) # generated_scrapper_code
+    filename = f"generated_scraper_quotes_{try_num}.py"
+    genereted_code_filename = filename
+    save_code_to_file(
+        code_generator_ai_response, genereted_code_filename
+    )  # generated_scrapper_code
     raise RuntimeError("Failed to generate complete code")
 
-
-genereted_code_filename = "generated_scraper_quotes_{try_num}.py"
-save_code_to_file(code_generator_ai_response, genereted_code_filename) # generated_scrapper_code
+filename = f"generated_scraper_quotes_{try_num}.py"
+genereted_code_filename = filename
+save_code_to_file(
+    code_generator_ai_response, genereted_code_filename
+)  # generated_scrapper_code
 run_generated_file(genereted_code_filename)
-
 
 
 # data = run_ai_scraper(code_generator_ai_response, url) # generated_scrapper_code
@@ -436,15 +502,6 @@ run_generated_file(genereted_code_filename)
 #         f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 # print("✅ Saved extracted data to ", output_json_filename)
-
-
-
-
-
-
-
-
-
 
 
 # MANUAL EXTRACTION
