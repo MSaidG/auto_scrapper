@@ -215,6 +215,17 @@ def validate_schema(schema: dict, html: str, base_url: str | None = None) -> dic
 
 WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
 
+def enforce_single_eof(code: str) -> str:
+    sentinel = "# === END OF FILE ==="
+    if sentinel not in code:
+        return code
+
+    first = code.index(sentinel)
+    return code[: first + len(sentinel)] + "\n"
+
+def has_multiple_main_blocks(code: str) -> bool:
+    return code.count("if __name__ == \"__main__\"") > 1
+
 
 class HTMLFetcher:
     def __init__(
@@ -287,11 +298,11 @@ class HTMLFetcher:
         )
 
 
-def infer_schema(blocks):
+def infer_schema(blocks, endpoint_result):
     try:
-        return build_schema_prompt(blocks)
+        return build_schema_prompt(blocks, endpoint_result)
     except RuntimeError:
-        return build_schema_prompt(blocks[:3])
+        return build_schema_prompt(blocks[:3], endpoint_result)
 
 
 fetcher = HTMLFetcher()
@@ -302,14 +313,12 @@ fetcher = HTMLFetcher()
 # url = "https://quotes.toscrape.com/tableful"
 url = "https://quotes.toscrape.com/random"
 
-try_num = 11
+try_num = 15
 html = fetcher.fetch_html(url)
 blocks = fetcher.extract_candidate_blocks(html)
 
 print(f"HTML size: {len(html)}")
 print(f"Blocks sent to LLM: {len(blocks)}")
-
-# print(blocks[0][:500])
 
 
 from schema_inferencer_prompt import build_schema_prompt
@@ -355,42 +364,47 @@ def extract_json(text: str) -> dict:
 
 
 def complete_the_code(code: str, schema: dict) -> tuple[bool, str]:
-    if "# === END OF FILE ===" not in code:
-        print("# === END OF FILE === IS NOT EXIST IN THE GENERATED CODE!")
+    code = clean_ai_code(code)
+    code = enforce_single_eof(code)
+    
+    
+    if looks_truncated(code):
+        print("LOOKS TRUNCATED!")
 
-        continuation = complete_scraper_code(code, schema)
+        continuation = complete_scraper_code(code, endpoint_result, schema)
         continuation = clean_ai_code(continuation)
         code += continuation
-        return False, code
+        return False, enforce_single_eof(code)
 
     try:
         compile(code, "<generated>", "exec")
-        return True, code
+        return True, enforce_single_eof(code)
+    
     except SyntaxError as e:
         print("SYNTAX ERROR IN THE GENERATED CODE!")
-        msg = f"SyntaxError: {e.msg}\n" f"Line: {e.lineno}\n" f"Text: {e.text}"
+        msg = (
+            f"SyntaxError: {e.msg}\n"
+            f"Line: {e.lineno}\n" 
+            f"Text: {e.text}\n"
+        )
         response = fix_scraper_code(code, msg)
         fixed_code = clean_ai_code(response)
-        return False, fixed_code
+        return False, enforce_single_eof(fixed_code)
 
 
 def is_code_complete(code: str) -> bool:
-    if "# === END OF FILE ===" not in code:
-        print("# === END OF FILE === IS NOT EXIST IN THE GENERATED CODE!")
+    code = clean_ai_code(code)
+    code = enforce_single_eof(code)
 
-        continuation = complete_scraper_code(code, schema)
-        continuation = clean_ai_code(continuation)
-        code += continuation
+    if looks_truncated(code):
         return False
 
     try:
         compile(code, "<generated>", "exec")
         return True
     except SyntaxError as e:
-        # print("SYNTAX ERROR IN THE GENERATED CODE!")
-        msg = f"SyntaxError: {e.msg}\n" f"Line: {e.lineno}\n" f"Text: {e.text}"
-
-        return False, msg
+        print(f"SyntaxError at line {e.lineno}: {e.msg}")
+        return False
 
 
 def is_syntax_valid(code: str):
@@ -404,7 +418,13 @@ def is_syntax_valid(code: str):
         return False, msg
 
 
+
 def looks_truncated(code: str) -> bool:
+    sentinel = "# === END OF FILE ==="
+    if sentinel in code:
+        return False
+
+    stripped = code.rstrip()
     bad_endings = (
         "def ",
         "class ",
@@ -414,106 +434,74 @@ def looks_truncated(code: str) -> bool:
         "while ",
         "=",
         "(",
-        "{",
         "[",
         ":",
     )
-    return code.rstrip().endswith(bad_endings)
+
+    return stripped.endswith(bad_endings)
 
 
 blocks = fetcher.extract_candidate_blocks(html)
 
-prompt = infer_schema(blocks)  # 🔑 5–20 blocks ONLY
+from endpoint_classifier import EndpointClassifier  
+import asyncio
 
+endpoint_classifier = EndpointClassifier(url)
+endpoint_result = asyncio.run(endpoint_classifier.classify())
+print("ENDPPOINT RESULT")
+print(endpoint_result)
+print("")
+
+prompt = infer_schema(blocks, endpoint_result)  # 🔑 5–20 blocks ONLY
 raw_output = openrouter_chat(
     prompt=prompt,
     model="mistralai/devstral-2512:free",  # "mistralai/mistral-7b-instruct:free", # "mistralai/devstral-2512:free",
     # temperature=0.0,
 )
 
-# print("RAW MODEL OUTPUT: ")
-# print(raw_output)
-# print(raw_output[:1000])
-
 schema = extract_json(raw_output)
-
 print("SCHEMA")
 print(schema)
 print("")
-
-
 validation = validate_schema(schema, html, base_url=url)
-
 print("VALIDATION")
 print(validation)
 print("")
-
 if not validation["valid"]:
     print("❌ Schema rejected, retry inference")
 else:
     print("✅ Schema accepted")
 
 
+
+
+
 # AI CODE GENERATED EXTRACTION
 MAX_CONTINUATIONS = 5
-
-code_generator_ai_response = generate_scraper_code(schema, url)
-code_generator_ai_response = clean_ai_code(
-    code_generator_ai_response
-)  # generated_scrapper_code = clean_ai_code(code_generator_ai_response)
-
+ai_generated_code = clean_ai_code(generate_scraper_code(schema, endpoint_result, url))
 for _ in range(MAX_CONTINUATIONS):
-
-    # if is_code_complete(code_generator_ai_response):
-    # break
-
-    is_completed, code_generator_ai_response = complete_the_code(
-        code_generator_ai_response, schema
+    is_completed, ai_generated_code = complete_the_code(
+        ai_generated_code, schema
     )
 
     if is_completed:
         break
+    
 
-    # continuation = complete_scraper_code(code_generator_ai_response, schema)
-    # continuation = clean_ai_code(continuation)
-    # code_generator_ai_response += continuation
 
-if not is_code_complete(code_generator_ai_response):
+if not is_code_complete(ai_generated_code):
     filename = f"generated_scraper_quotes_{try_num}.py"
     genereted_code_filename = filename
     save_code_to_file(
-        code_generator_ai_response, genereted_code_filename
+        ai_generated_code, genereted_code_filename
     )  # generated_scrapper_code
     raise RuntimeError("Failed to generate complete code")
 
 filename = f"generated_scraper_quotes_{try_num}.py"
 genereted_code_filename = filename
 save_code_to_file(
-    code_generator_ai_response, genereted_code_filename
+    ai_generated_code, genereted_code_filename
 )  # generated_scrapper_code
 run_generated_file(genereted_code_filename)
 
 
-# data = run_ai_scraper(code_generator_ai_response, url) # generated_scrapper_code
-
-# output_json_filename = "generated_scraper_quotes_{try_num}_output.json"
-# with open(output_json_filename, "w", encoding="utf-8") as f:
-#     for item in data:
-#         f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-# print("✅ Saved extracted data to ", output_json_filename)
-
-
-# MANUAL EXTRACTION
-# data = extract_data(schema, html, base_url=url)
-
-# print("EXTRACTED DATA")
-# print(data[:2])
-# print("")
-
-
-# with open("output.json", "w", encoding="utf-8") as f:
-#     for item in data:
-#         f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-# print("Saved extracted data to output.json")

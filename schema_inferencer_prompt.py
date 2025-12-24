@@ -1,6 +1,6 @@
-import json
 from typing import List
-
+from typing import List, Dict, Any
+import json
 
 SCHEMA_INFERENCE_PROMPT = """
 ROLE:
@@ -17,6 +17,8 @@ RULES:
 - Do NOT generate scraping code
 - Prefer stable selectors (avoid dynamic IDs)
 - Assume the site structure may change slightly
+- Use ENDPOINT CONTEXT to avoid fields that cannot exist
+  (e.g., pagination fields for random endpoints)
 
 OUTPUT FORMAT (JSON ONLY):
 {
@@ -32,17 +34,27 @@ OUTPUT FORMAT (JSON ONLY):
 }
 """
 
-def build_schema_prompt(blocks: List[str]) -> str:
+def build_schema_prompt(
+    blocks: List[str],
+    endpoint_result: Dict[str, Any]
+) -> str:
     """
     Builds the final prompt sent to the LLM.
     """
+
     html_section = "\n\n".join(
         f"### BLOCK {i+1}\n{block}"
         for i, block in enumerate(blocks)
     )
 
+    endpoint_section = json.dumps(endpoint_result, indent=2)
+
     return f"""{SCHEMA_INFERENCE_PROMPT}
 
-HTML SNIPPETS:
-{html_section}
-"""
+      ENDPOINT CONTEXT (for guidance only):
+      {endpoint_section}
+
+      HTML SNIPPETS:
+      {html_section}
+    
+    """
