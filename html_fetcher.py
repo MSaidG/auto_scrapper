@@ -152,65 +152,99 @@ def extract_data(schema: dict, html: str, base_url: str | None = None) -> list[d
     return results
 
 
-def validate_schema(schema: dict, html: str, base_url: str | None = None) -> dict:
+# def validate_schema(schema: dict, html: str, endpoint_type: str = "DEFAULT") -> dict:
+#     soup = BeautifulSoup(html, "lxml")
+
+#     result = {
+#         "valid": False,
+#         "confidence": 0.0,
+#         "containers_found": 0,
+#         "fields": {},
+#         "errors": [],
+#     }
+
+#     # 1️⃣ Find containers
+#     containers = soup.select(schema["container_selector"])
+#     result["containers_found"] = len(containers)
+
+#     if len(containers) < 2:
+#         result["errors"].append("Container selector returned < 2 elements")
+#         return result
+
+#     total_score = 0
+#     field_count = len(schema["fields"])
+
+#     # 2️⃣ Validate fields
+#     for field, spec in schema["fields"].items():
+#         matches = 0
+
+#         for c in containers:
+#             elements = c.select(spec["selector"])
+#             if not elements:
+#                 continue
+
+#             el = elements[0]
+#             value = (
+#                 el.get(spec["attribute"])
+#                 if spec["attribute"]
+#                 else el.get_text(strip=True)
+#             )
+
+#             if value:
+#                 matches += 1
+
+#         coverage = matches / len(containers)
+#         ok = coverage >= 0.5  # threshold
+
+#         result["fields"][field] = {
+#             "ok": ok,
+#             "coverage": round(coverage, 2),
+#         }
+
+#         if ok:
+#             total_score += coverage
+#         else:
+#             result["errors"].append(f"Field '{field}' failed validation")
+
+#     # 3️⃣ Final score
+#     result["confidence"] = round(total_score / field_count, 2)
+#     result["valid"] = result["confidence"] >= 0.7
+
+#     return result
+
+
+def validate_schema(schema, html, endpoint_type="DEFAULT"):
     soup = BeautifulSoup(html, "lxml")
 
-    result = {
-        "valid": False,
-        "confidence": 0.0,
-        "containers_found": 0,
-        "fields": {},
-        "errors": [],
-    }
-
-    # 1️⃣ Find containers
     containers = soup.select(schema["container_selector"])
-    result["containers_found"] = len(containers)
+    if not containers:
+        return {"valid": False, "reason": "No containers"}
 
-    if len(containers) < 2:
-        result["errors"].append("Container selector returned < 2 elements")
-        return result
+    min_coverage = {
+        "RANDOM": 0.1,
+        "SCROLL": 0.3,
+        "PAGINATION": 0.3,
+        "TABLE": 0.1,
+        "DEFAULT": 0.5,
+    }.get(endpoint_type, 0.5)
 
-    total_score = 0
-    field_count = len(schema["fields"])
-
-    # 2️⃣ Validate fields
+    field_scores = []
     for field, spec in schema["fields"].items():
         matches = 0
-
         for c in containers:
-            elements = c.select(spec["selector"])
-            if not elements:
-                continue
-
-            el = elements[0]
-            value = (
-                el.get(spec["attribute"])
-                if spec["attribute"]
-                else el.get_text(strip=True)
-            )
-
-            if value:
+            el = c.select_one(spec["selector"])
+            if el:
                 matches += 1
 
         coverage = matches / len(containers)
-        ok = coverage >= 0.5  # threshold
+        field_scores.append(coverage)
 
-        result["fields"][field] = {
-            "ok": ok,
-            "coverage": round(coverage, 2),
-        }
-
-        if ok:
-            total_score += coverage
-        else:
-            result["errors"].append(f"Field '{field}' failed validation")
-
-    # 3️⃣ Final score
-    result["confidence"] = round(total_score / field_count, 2)
-    result["valid"] = result["confidence"] >= 0.7
-
-    return result
+    confidence = sum(field_scores) / len(field_scores)
+    return {
+        "valid": confidence >= min_coverage,
+        "confidence": round(confidence, 2),
+        "containers_found": len(containers),
+    }
 
 
 WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
@@ -259,9 +293,30 @@ class HTMLFetcher:
             html = page.content()
             browser.close()
 
-        if len(html.encode("utf-8")) > self.max_page_size:
-            html = html[: self.max_page_size]
+        # if len(html.encode("utf-8")) > self.max_page_size:
+        #     html = html[: self.max_page_size]
 
+        # return html
+        
+        
+        # 🔧 DOM-safe size limiting
+        soup = BeautifulSoup(html, "lxml")
+
+        current_size = len(str(soup).encode("utf-8"))
+
+        if current_size > self.max_page_size:
+            # Remove largest elements first (deepest nodes)
+            for tag in sorted(
+                soup.find_all(recursive=True),
+                key=lambda t: len(str(t)),
+                reverse=True,
+            ):
+                tag.decompose()
+                current_size = len(str(soup).encode("utf-8"))
+                if current_size <= self.max_page_size:
+                    break
+
+        html = str(soup)
         return html
 
     def extract_candidate_blocks(self, html: str, limit: int = 20) -> List[str]:
@@ -305,20 +360,21 @@ def infer_schema(blocks, endpoint_result):
         return build_schema_prompt(blocks[:3], endpoint_result)
 
 
-fetcher = HTMLFetcher()
 
 # url = "https://quotes.toscrape.com/"
 # url = "https://books.toscrape.com/"
 # url = "https://quotes.toscrape.com/scroll"
 # url = "https://quotes.toscrape.com/tableful"
-url = "https://quotes.toscrape.com/random"
+# url = "https://quotes.toscrape.com/random"
+# url = "https://quotes.toscrape.com/js/"
+url = "https://quotes.toscrape.com/search.aspx"
 
-try_num = 15
-html = fetcher.fetch_html(url)
-blocks = fetcher.extract_candidate_blocks(html)
+try_num = 23
 
-print(f"HTML size: {len(html)}")
-print(f"Blocks sent to LLM: {len(blocks)}")
+# blocks = fetcher.extract_candidate_blocks(html)
+
+# print(f"HTML size: {len(html)}")
+# print(f"Blocks sent to LLM: {len(blocks)}")
 
 
 from schema_inferencer_prompt import build_schema_prompt
@@ -441,6 +497,10 @@ def looks_truncated(code: str) -> bool:
     return stripped.endswith(bad_endings)
 
 
+
+
+fetcher = HTMLFetcher()
+html = fetcher.fetch_html(url)
 blocks = fetcher.extract_candidate_blocks(html)
 
 from endpoint_classifier import EndpointClassifier  
@@ -463,7 +523,7 @@ schema = extract_json(raw_output)
 print("SCHEMA")
 print(schema)
 print("")
-validation = validate_schema(schema, html, base_url=url)
+validation = validate_schema(schema, html, endpoint_result["type"])
 print("VALIDATION")
 print(validation)
 print("")
