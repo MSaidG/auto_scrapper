@@ -14,6 +14,104 @@ import inspect
 import re
 
 
+def is_category_tree(tag) -> bool:
+    """
+    Detect hierarchical category / taxonomy structures.
+    """
+
+    # Must contain lists
+    lists = tag.find_all(["ul", "ol"])
+    if not lists:
+        return False
+
+    # Many list items
+    li_items = tag.find_all("li")
+    if len(li_items) < 5:
+        return False
+
+    # Shallow text items
+    short_items = 0
+    child_lists = 0
+
+    for li in li_items:
+        text_len = len(li.get_text(strip=True))
+        if text_len < 40:
+            short_items += 1
+        if li.find(["ul", "ol"]):
+            child_lists += 1
+
+    # Strong indicators of taxonomy
+    if short_items / len(li_items) > 0.7 and child_lists >= 2:
+        return True
+
+    return False
+
+
+def is_navigation_block(tag) -> bool:
+    """
+    Heuristic detection of navigation / boilerplate blocks.
+    """
+
+    text = tag.get_text(" ", strip=True).lower()
+    links = tag.find_all("a")
+    text_len = len(text)
+
+    # Too many links, too little text
+    if links and text_len < 200 and len(links) >= 3:
+        return True
+
+    # Link-heavy ratio
+    link_text_len = sum(len(a.get_text(strip=True)) for a in links)
+    if text_len > 0 and link_text_len / text_len > 0.6:
+        return True
+
+    # Navigation keywords
+    nav_keywords = [
+        "login", "register", "account", "profile", "wishlist",
+        "favorite", "cart", "basket", "checkout",
+        "sign in", "sign up", "logout",
+        "my account", "sipariş", "alışveriş", "favori"
+    ]
+    if any(k in text for k in nav_keywords):
+        return True
+
+    # Pure menu lists
+    if tag.name in {"nav", "header", "footer"}:
+        return True
+
+    return False
+
+def score_content_block(tag) -> float:
+    text = tag.get_text(" ", strip=True)
+    text_len = len(text)
+
+    links = tag.find_all("a")
+    imgs = tag.find_all("img")
+
+    score = 0.0
+
+    # Text volume
+    score += min(text_len / 500, 3.0)
+
+    # Images often indicate products/articles
+    score += len(imgs) * 1.5
+
+    # Penalize link-heavy blocks (categories)
+    if text_len > 0:
+        link_text_len = sum(len(a.get_text(strip=True)) for a in links)
+        link_ratio = link_text_len / text_len
+        score -= link_ratio * 3.0
+
+    # Penalize pure trees (lots of <li> without nested content)
+    li_count = len(tag.find_all("li"))
+    div_count = len(tag.find_all("div"))
+    if li_count > 5 and div_count < 3:
+        score -= 2.0
+
+    return score
+
+
+
 def extract_python_code(ai_response: str) -> str:
     import re
 
@@ -297,8 +395,8 @@ class HTMLFetcher:
         #     html = html[: self.max_page_size]
 
         # return html
-        
-        
+
+
         # 🔧 DOM-safe size limiting
         soup = BeautifulSoup(html, "lxml")
 
@@ -319,26 +417,93 @@ class HTMLFetcher:
         html = str(soup)
         return html
 
-    def extract_candidate_blocks(self, html: str, limit: int = 20) -> List[str]:
-        """
-        🔑 CRITICAL PART
-        This is what you send to the LLM.
-        """
+    # def extract_candidate_blocks(self, html: str, limit: int = 20) -> List[str]:
+    #     """
+    #     🔑 CRITICAL PART
+    #     This is what you send to the LLM.
+    #     """
+    #     soup = BeautifulSoup(html, "lxml")
+
+    #     # remove noise
+    #     for tag in soup(["script", "style", "noscript"]):
+    #         tag.decompose()
+
+    #     for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+    #         c.extract()
+
+    #     blocks = soup.find_all(
+    #         ["article", "li", "section", "div", "table", "thead", "tbody", "td"],
+    #         limit=limit,
+    #     )
+
+    #     return [str(b) for b in blocks if len(b.get_text(strip=True)) > 50]
+    
+    # def extract_candidate_blocks(self, html: str, limit: int = 20) -> List[str]:
+    #     soup = BeautifulSoup(html, "lxml")
+
+    #     # Remove noise
+    #     for tag in soup(["script", "style", "noscript"]):
+    #         tag.decompose()
+
+    #     for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+    #         c.extract()
+
+    #     candidates = soup.find_all(
+    #         ["article", "section", "div", "li", "table", "tbody", "tr"],
+    #     )
+
+    #     blocks = []
+    #     for tag in candidates:
+    #         if is_navigation_block(tag):
+    #             continue
+
+    #         text = tag.get_text(strip=True)
+    #         if len(text) < 80:
+    #             continue
+
+    #         blocks.append(str(tag))
+
+    #         if len(blocks) >= limit:
+    #             break
+
+    #     return blocks
+    
+    
+    def extract_candidate_blocks(self, html: str, limit: int = 10) -> List[str]:
         soup = BeautifulSoup(html, "lxml")
 
-        # remove noise
         for tag in soup(["script", "style", "noscript"]):
             tag.decompose()
 
         for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
             c.extract()
 
-        blocks = soup.find_all(
-            ["article", "li", "section", "div", "table", "thead", "tbody", "td"],
-            limit=limit,
+        candidates = soup.find_all(
+            ["article", "section", "div", "li", "table", "tbody"],
         )
 
-        return [str(b) for b in blocks if len(b.get_text(strip=True)) > 50]
+        scored = []
+        for tag in candidates:
+            if is_navigation_block(tag):
+                continue
+
+            if is_category_tree(tag):
+                continue  # 🔥 THIS LINE FIXES YOUR ISSUE
+
+            text = tag.get_text(strip=True)
+            if len(text) < 80:
+                continue
+
+            score = score_content_block(tag)
+            scored.append((score, tag))
+
+        # THIS IS THE KEY
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        top_blocks = [str(tag) for score, tag in scored[:limit]]
+
+        return top_blocks
+
 
     def _validate_url(self, url: str):
         parsed = urlparse(url)
@@ -361,13 +526,24 @@ def infer_schema(blocks, endpoint_result):
 
 
 
+
 # url = "https://quotes.toscrape.com/"
-# url = "https://books.toscrape.com/"
 # url = "https://quotes.toscrape.com/scroll"
-# url = "https://quotes.toscrape.com/tableful"
 # url = "https://quotes.toscrape.com/random"
-# url = "https://quotes.toscrape.com/js/"
-url = "https://quotes.toscrape.com/search.aspx"
+# url = "https://quotes.toscrape.com/tableful/"
+# url = "https://www.gutenberg.org/ebooks/search/"
+# url = "https://books.toscrape.com/" ## ADDED
+url = "https://www.kitapyurdu.com/index.php?route=product%2Fbest_sellers&list_id=729&filter_in_shelf=0&filter_in_stock=0" ## ADDED
+# url = "https://www.rottentomatoes.com/browse/tv_series_browse/sort:popular"
+# url = "https://www.imdb.com/interest/in0000001/"
+# url = "https://news.ycombinator.com/"
+# url = "https://stackoverflow.com/questions"
+# url = "https://medium.com/tag/web-development"
+# url = "https://www.reddit.com/r/webdev/"
+# url = "https://www.iana.org/protocols"
+# url = "https://www.facebook.com/"
+# url = "https://x.com/"
+# url = "https://quotes.toscrape.com/search.aspx"
 
 try_num = 23
 
@@ -422,8 +598,8 @@ def extract_json(text: str) -> dict:
 def complete_the_code(code: str, schema: dict) -> tuple[bool, str]:
     code = clean_ai_code(code)
     code = enforce_single_eof(code)
-    
-    
+
+
     if looks_truncated(code):
         print("LOOKS TRUNCATED!")
 
@@ -435,12 +611,12 @@ def complete_the_code(code: str, schema: dict) -> tuple[bool, str]:
     try:
         compile(code, "<generated>", "exec")
         return True, enforce_single_eof(code)
-    
+
     except SyntaxError as e:
         print("SYNTAX ERROR IN THE GENERATED CODE!")
         msg = (
             f"SyntaxError: {e.msg}\n"
-            f"Line: {e.lineno}\n" 
+            f"Line: {e.lineno}\n"
             f"Text: {e.text}\n"
         )
         response = fix_scraper_code(code, msg)
@@ -503,7 +679,9 @@ fetcher = HTMLFetcher()
 html = fetcher.fetch_html(url)
 blocks = fetcher.extract_candidate_blocks(html)
 
-from endpoint_classifier import EndpointClassifier  
+print(blocks)
+
+from endpoint_classifier import EndpointClassifier
 import asyncio
 
 endpoint_classifier = EndpointClassifier(url)
@@ -546,7 +724,7 @@ for _ in range(MAX_CONTINUATIONS):
 
     if is_completed:
         break
-    
+
 
 
 if not is_code_complete(ai_generated_code):

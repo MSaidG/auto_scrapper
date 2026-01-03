@@ -3,3 +3,4 @@ venv
 output*
 *.json
 __pycache__
+*.txt
