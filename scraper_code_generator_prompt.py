@@ -26,48 +26,23 @@ def generate_scraper_code(schema: dict, endpoint_result: Dict[str, Any], base_ur
     - Scrapes data according to the schema
     - Handles missing fields safely
     - Support pagination
-    - Saves output to a JSON file
+    - Must save scraped json data to a JSON file (do not print it)
     - Is fully runnable
-    - Write safe code so to not crash
-    - Keep the browser open in the entire scraping process 
-    instead of reopening for every single page request
-    
+
     CONSTRAINTS:
-    - No markdown
-    - No backticks
-    - No explanations
-    - No placeholders
-    - No global variables
+    - No markdown, backticks, explanations, placeholders, global variables
     - Clear function boundaries
     - Use base_url
     - Convert JSON null → Python None
     - Ensure all brackets, quotes, and blocks are closed
     - Include a main section (`if __name__ == "__main__":`) to run the scraper
+    - Write safe code to not crash
     - End the file with exactly: # === END OF FILE ===
     
-    You MUST NOT:
-    - call page.wait_for_selector
+    DO NOT:
     - assume any selector exists
     - throw exceptions on missing elements
     
-    SAFE CODE EXAMPLES:
-    "
-        selector = await scraper.find_first(CANDIDATES)
-        if selector is None:
-            return []
-    "
-    "        
-        async def run_safe(scrape_fn):
-            try:
-                return await scrape_fn()
-            except Exception as e:
-                return {
-                    "status": "failed",
-                    "reason": str(e)
-                }
-    "
-    
-
     BASE_URL:
     {base_url}
 
