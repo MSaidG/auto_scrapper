@@ -708,6 +708,8 @@ def looks_truncated(code: str) -> bool:
     return stripped.endswith(bad_endings)
 
 
+
+
 # ... [Main Execution Block] ...
 
 
@@ -718,15 +720,15 @@ def looks_truncated(code: str) -> bool:
 # url = "https://www.gutenberg.org/ebooks/search/"
 # url = "https://books.toscrape.com/" ## ADDED
 # url = "https://www.kitapyurdu.com/index.php?route=product%2Fbest_sellers&list_id=729&filter_in_shelf=0&filter_in_stock=0" ## ADDED
-# url = "https://www.rottentomatoes.com/browse/tv_series_browse/sort:popular"
 # url = "https://news.ycombinator.com/"
+# url = "https://www.rottentomatoes.com/browse/tv_series_browse/sort:popular"
 # url = "https://www.scrapethissite.com/pages/simple/"
 # url = "https://www.scrapethissite.com/pages/forms/"
 # url = "https://www.scrapethissite.com/pages/forms/?page_num=1"
+# url = "https://www.mcmaster.com/"
+url = ""
 
 
-
-url = "https://www.mcmaster.com/"
 # url = "https://www.imdb.com/chart/top/"
 # url = "https://stackoverflow.com/questions?page=1"
 # url = "https://medium.com/tag/web-development"
@@ -762,6 +764,7 @@ if __name__ == "__main__":
     # Infer Schema
     print("🤖 Inferring Schema...")
     prompt = infer_schema(blocks, endpoint_result)
+    
 
     # Retry loop for schema generation
     schema = None

@@ -4,3 +4,7 @@ output*
 *.json
 __pycache__
 *.txt
+generated_code_and_outputs
+last_generated_code_and_results
+generated*
+8_rotten.py
